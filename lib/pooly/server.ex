@@ -27,9 +27,37 @@ defmodule Pooly.Server do
   # Callbacks #
   #############
 
+  def handle_info({:DOWN, ref, _, _, _}, state = %{monitors: monitors, workers: workers}) do
+    case :ets.match(monitors, {:"$1", ref}) do
+      [[pid]] ->
+        true = :ets.delete(monitors, pid)
+        new_state = %{state | workers: [pid | workers]}
+        # returns the workers to the pool
+        {:noreply, new_state}
+      [[]] ->
+        {:noreply, state}
+    end
+  end
+
+  # when the server process traps the exit, you handle that in the
+  # :EXIT message coming from the worker.
+  def handle_info({:EXIT, pid, _reason}, state = %{monitors: monitors, workers: workers, worker_sup: worker_sup}) do
+    case :ets.lookup(monitors, pid) do
+      [{pid, ref}] ->
+        true = Process.demonitor(ref)
+        true = :ets.delete(monitors, pid)
+        new_state = %{state | workers: [new_worker(worker_sup)|workers]}
+        {:noreply, new_state}
+      [[]] ->
+        {:noreply, state}
+    end
+  end
+
   # callback invoked when GenServer.start_link is called
   # stores monitors in ets table
   def init([sup, pool_config]) when is_pid(sup) do
+    # wehn a worker dies it doesnt kill the server process
+    Process.flag(:trap_exit, true)
     monitors = :ets.new(:monitors, [:private])
     init(pool_config, %State{sup: sup, monitors: monitors})
   end
